@@ -13,10 +13,15 @@ from sklearn.linear_model import LogisticRegression
 from google.cloud import firestore
 from firebase_admin import credentials, firestore
 from fastapi import HTTPException
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
 router = APIRouter()
 
-from fastapi import HTTPException
+current_file_path = __file__
+src_directory = os.path.dirname(os.path.dirname(os.path.dirname(current_file_path)))
+data_directory = os.path.join(src_directory, 'data')
+model_directory = os.path.join(src_directory, 'models')
+
 
 @router.get("/data", name="Download dataset from Kaggle", response_model=MessageResponse)
 def data() -> MessageResponse:
@@ -28,11 +33,12 @@ def data() -> MessageResponse:
         MessageResponse: A success message if the dataset was downloaded and moved successfully, 
         or an error message otherwise.
     """
-    destination_path = r"C:\Users\paulf\Documents\EPF\Data sources\API---Webscrapping\TP2 and  3\services\epf-flower-data-science\src\data"
+    destination_path = data_directory
     target_path = r"C:\Users\paulf\.cache\kagglehub\datasets\uciml\iris\versions\2\iris.csv"
     
     try:
         path = kagglehub.dataset_download("uciml/iris")
+        print(path)
         shutil.move(target_path, destination_path)
         return MessageResponse(message=f"Data successfully downloaded and moved to: {destination_path}")
     except Exception as e:
@@ -48,7 +54,7 @@ def load_iris() -> MessageResponse:
         MessageResponse: JSON representation of the Iris dataset, 
         or an error message if loading fails.
     """
-    download_path = r"C:\Users\paulf\Documents\EPF\Data sources\API---Webscrapping\TP2 and  3\services\epf-flower-data-science\src\data\iris.csv"
+    download_path = os.path.join(data_directory, "iris.csv")
     
     try:
         iris_df = pd.read_csv(download_path)
@@ -69,7 +75,7 @@ def process_iris() -> MessageResponse:
         MessageResponse: A success message if processing is successful, 
         or an error message otherwise.
     """
-    path = r"C:\Users\paulf\Documents\EPF\Data sources\API---Webscrapping\TP2 and  3\services\epf-flower-data-science\src\data\iris.csv"
+    path = os.path.join(data_directory, "iris.csv")
     
     try:
         iris_df = pd.read_csv(path)
@@ -92,8 +98,8 @@ def split_iris() -> MessageResponse:
         MessageResponse: JSON representation of the split datasets, 
         or an error message if splitting fails.
     """
-    path = r"C:\Users\paulf\Documents\EPF\Data sources\API---Webscrapping\TP2 and  3\services\epf-flower-data-science\src\data\iris.csv"
-    short_path = r"C:\Users\paulf\Documents\EPF\Data sources\API---Webscrapping\TP2 and  3\services\epf-flower-data-science\src\data"
+    path = os.path.join(data_directory, "iris.csv")
+    short_path = data_directory
     
     try:
         iris_df = pd.read_csv(path)
@@ -126,27 +132,41 @@ def split_iris() -> MessageResponse:
 def train_model() -> MessageResponse:
     """
     Trains a Logistic Regression model on the Iris dataset.
-    The model is saved to a specified path.
+    The model is saved to a specified path and evaluated on the test set.
 
     Returns:
-        MessageResponse: A message containing model hyperparameters and training score, 
+        MessageResponse: A message containing model hyperparameters, training score, test evaluation metrics,
         or an error message if training fails.
     """
-    short_path = r"C:\Users\paulf\Documents\EPF\Data sources\API---Webscrapping\TP2 and  3\services\epf-flower-data-science\src\data"
-    model_path = r'C:\Users\paulf\Documents\EPF\Data sources\API---Webscrapping\TP2 and  3\services\epf-flower-data-science\src\models\logistic_regression_model.joblib'
+    short_path = data_directory
+    model_path = os.path.join(model_directory, 'logistic_regression_model.joblib')
 
     try:
         X_train = pd.read_csv(short_path + "\X_train.csv")
         y_train = pd.read_csv(short_path + "\y_train.csv")
         with open('config/model_parameters.json', 'r') as file:
             model_params = json.load(file)["LogisticRegression"]
-
         model = LogisticRegression(**model_params)
         model.fit(X_train, y_train)
-
         joblib.dump(model, model_path)
 
-        return MessageResponse(message=f"Model hyperparameters: {model.get_params()} | Training score: {model.score(X_train, y_train)} | Successfully saved.")
+        X_test = pd.read_csv(short_path + "\X_test.csv")
+        y_test = pd.read_csv(short_path + "\y_test.csv")
+        y_pred = model.predict(X_test)
+        accuracy = accuracy_score(y_test, y_pred)
+        precision = precision_score(y_test, y_pred, average='weighted')
+        recall = recall_score(y_test, y_pred, average='weighted')
+        f1 = f1_score(y_test, y_pred, average='weighted')
+        evaluation_message = (
+            f"Model hyperparameters: {model.get_params()} | "
+            f"Training score: {model.score(X_train, y_train)} | "
+            f"Test set evaluation: Accuracy: {accuracy:.4f}, "
+            f"Precision: {precision:.4f}, Recall: {recall:.4f}, F1 Score: {f1:.4f} | "
+            "Model successfully saved and evaluated."
+        )
+
+        return MessageResponse(message=evaluation_message)
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error during model training or saving: {e}")
 
@@ -158,13 +178,13 @@ def predict_model(prediction: str) -> MessageResponse:
     using input features provided as a comma-separated string.
 
     Args:
-        prediction (str): A comma-separated list of feature values (e.g., "5.1,3.5,1.4,0.2").
+        prediction (str): A comma-separated list of feature values (e.g., "5.1,3.5,1.4,0.2" for SepalLengthCm,SepalWidthCm,PetalLengthCm,PetalWidthCm).
 
     Returns:
         MessageResponse: The predicted class label, 
         or an error message if prediction fails.
     """
-    model_path = r'C:\Users\paulf\Documents\EPF\Data sources\API---Webscrapping\TP2 and  3\services\epf-flower-data-science\src\models\logistic_regression_model.joblib'
+    model_path = os.path.join(model_directory, 'logistic_regression_model.joblib')
 
     try:
         features = list(map(float, prediction.split(',')))
@@ -192,7 +212,7 @@ def retrieve_parameters() -> MessageResponse:
         MessageResponse: A response message containing the parameters from Firestore if found,
         or an error message if the parameters document is not found.
     """
-    key_path = r"C:\Users\paulf\Documents\EPF\Data sources\API---Webscrapping\TP2 and  3\api-fourdrinoy-7d86e5dd6927.json"
+    key_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(src_directory))), "api-fourdrinoy-7d86e5dd6927.json")
 
     try:
         if not firebase_admin._apps:
@@ -225,7 +245,7 @@ def add_parameters(parameters: dict) -> MessageResponse:
     Returns:
         MessageResponse: A response message indicating whether the parameters were successfully added.
     """
-    key_path = r"C:\Users\paulf\Documents\EPF\Data sources\API---Webscrapping\TP2 and  3\api-fourdrinoy-7d86e5dd6927.json"
+    key_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(src_directory))), "api-fourdrinoy-7d86e5dd6927.json")
 
     try:
         if not firebase_admin._apps:
@@ -254,7 +274,7 @@ def update_parameters(updates: dict) -> MessageResponse:
     Returns:
         MessageResponse: A response message indicating whether the parameters were successfully updated.
     """
-    key_path = r"C:\Users\paulf\Documents\EPF\Data sources\API---Webscrapping\TP2 and  3\api-fourdrinoy-7d86e5dd6927.json"
+    key_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(src_directory))), "api-fourdrinoy-7d86e5dd6927.json")
 
     try:
         if not firebase_admin._apps:
